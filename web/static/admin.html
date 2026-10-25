@@ -45,10 +45,21 @@
     <section class="card">
       <h3>批量导入设备</h3>
       <form id="batch" class="col">
-        <select name="group" required></select>
-        <textarea name="devices" rows="6" placeholder="每行一台：设备ID,显示名&#10;car-001,沪A12345&#10;car-002,沪B67890"></textarea>
+        <label for="batch-group">目标群</label>
+        <select id="batch-group" name="group" required></select>
+        <label for="batch-devices">设备列表</label>
+        <textarea id="batch-devices" name="devices" rows="6" aria-describedby="batch-help batch-summary" placeholder="car-001,沪A12345&#10;car-002,沪B67890"></textarea>
+        <p id="batch-help" class="batch-help">每行一台：设备ID,显示名。显示名可省略，支持中英文逗号或制表符分隔；不需要表头。</p>
+        <p id="batch-summary" class="batch-summary" role="status" aria-live="polite"></p>
+        <div id="batch-preview" class="batch-preview" hidden>
+          <table aria-label="设备导入预览">
+            <thead><tr><th>行</th><th>设备 ID</th><th>显示名</th><th>检查</th></tr></thead>
+            <tbody id="batch-rows"></tbody>
+          </table>
+        </div>
         <label class="check"><input type="checkbox" name="pin" checked> 设为设备当前频道（固定频道）</label>
-        <button class="btn primary">导入</button>
+        <button id="batch-submit" class="btn primary" disabled>导入</button>
+        <div id="batch-result" class="batch-result" role="status" aria-live="polite" hidden></div>
       </form>
     </section>
   </aside>

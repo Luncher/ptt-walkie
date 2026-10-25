@@ -43,6 +43,7 @@ function ago(iso) {
 
 let groups = [];
 let busy = false;
+let batchPending = false;
 
 async function refresh() {
   if (busy) return;
@@ -63,11 +64,15 @@ function render() {
   }
   $('#stats').textContent = `${groups.length} 个群 · ${online.size} 台设备在线 · ${speaking} 个群正在通话`;
 
-  const sel = $('#batch select[name=group]');
-  const keep = sel.value;
-  sel.innerHTML = '';
-  for (const g of groups) sel.append(el('option', { value: g.id }, `${g.name}（${g.code}）`));
-  if (keep) sel.value = keep;
+  // Keep the submitted destination stable while an import is in flight.
+  if (!batchPending) {
+    const sel = $('#batch select[name=group]');
+    const keep = sel.value;
+    sel.innerHTML = '';
+    for (const g of groups) sel.append(el('option', { value: g.id }, `${g.name}（${g.code}）`));
+    if (keep) sel.value = keep;
+    renderBatchPreview();
+  }
 
   const box = $('#groups');
   // Preserve open state of member lists across re-renders.
@@ -206,20 +211,103 @@ createForm.onsubmit = (e) => {
   });
 };
 
-$('#batch').onsubmit = (e) => {
+// ---------- batch import ----------
+// Preserve line numbers and leading delimiters so an empty ID is not hidden
+// by trimming a tab-separated row. Blank lines are ignored.
+function parseBatchRows(text) {
+  const seen = new Map();
+  return text.split(/\r?\n/).flatMap((raw, i) => {
+    if (!raw.trim()) return [];
+    const [id, ...rest] = raw.split(/[,，\t]/);
+    const device_id = id.trim();
+    const name = rest.join(',').trim();
+    let error = '';
+    if (!device_id) error = '设备 ID 不能为空';
+    else if (seen.has(device_id)) error = `与第 ${seen.get(device_id)} 行重复`;
+    else seen.set(device_id, i + 1);
+    return [{ line: i + 1, raw, device_id, name, error }];
+  });
+}
+
+function renderBatchPreview() {
+  const f = $('#batch');
+  const rows = parseBatchRows(f.elements.devices.value);
+  const invalid = rows.filter((r) => r.error).length;
+  $('#batch-preview').hidden = !rows.length;
+  $('#batch-rows').replaceChildren(...rows.map((r) => el('tr', { class: r.error ? 'invalid' : '' },
+    el('td', {}, String(r.line)), el('td', {}, r.device_id || '（空）'),
+    el('td', {}, r.name || '—'), el('td', {}, r.error || '可导入'),
+  )));
+  const summary = $('#batch-summary');
+  summary.textContent = !rows.length ? '粘贴设备列表后可预览。' :
+    `共 ${rows.length} 行 · 有效 ${rows.length - invalid} 台` +
+    (invalid ? ` · ${invalid} 行需修正，修正后才能导入。` : ' · 请确认目标群后导入。');
+  if (!f.elements.group.value) summary.textContent += ' 请先创建或选择目标群。';
+  summary.classList.toggle('invalid', invalid > 0);
+  f.elements.devices.setAttribute('aria-invalid', String(invalid > 0));
+  const btn = $('#batch-submit');
+  btn.disabled = batchPending || !rows.length || invalid > 0 || !f.elements.group.value;
+  btn.textContent = batchPending ? '正在导入…' : rows.length && !invalid ? `导入 ${rows.length} 台设备` : '导入';
+  return rows;
+}
+
+$('#batch-devices').addEventListener('input', () => {
+  $('#batch-result').hidden = true;
+  renderBatchPreview();
+});
+$('#batch-group').addEventListener('change', renderBatchPreview);
+
+$('#batch').onsubmit = async (e) => {
   e.preventDefault();
+  if (batchPending) return;
   const f = e.target;
-  const devices = f.devices.value.split('\n').map((l) => l.trim()).filter(Boolean).map((l) => {
-    const [device_id, ...rest] = l.split(/[,，\t]/);
-    return { device_id: device_id.trim(), name: rest.join(',').trim() };
-  });
-  if (!devices.length) return toast('请填写设备');
-  act(async () => {
-    const r = await api('POST', `/api/groups/${f.group.value}/members/batch`, { devices, pin: f.pin.checked });
-    toast(`导入 ${r.joined.length} 台${r.failed.length ? `，失败 ${r.failed.length} 台` : ''}`);
-    f.devices.value = '';
-  });
+  const rows = renderBatchPreview();
+  const group = f.elements.group.value;
+  if (!group || !rows.length || rows.some((r) => r.error)) return;
+  const groupName = f.elements.group.selectedOptions[0].textContent;
+  const pin = f.elements.pin.checked;
+  batchPending = true;
+  f.setAttribute('aria-busy', 'true');
+  for (const control of f.elements) control.disabled = true;
+  renderBatchPreview();
+  const result = $('#batch-result');
+  result.hidden = true;
+  try {
+    const r = await api('POST', `/api/groups/${encodeURIComponent(group)}/members/batch`, {
+      devices: rows.map(({ device_id, name }) => ({ device_id, name })), pin,
+    });
+    // The Go endpoint encodes empty result slices as null.
+    if (!r || (r.joined !== null && !Array.isArray(r.joined)) || (r.failed !== null && !Array.isArray(r.failed))) {
+      throw new Error('服务器返回了无法识别的导入结果');
+    }
+    const joined = new Set(r.joined || []);
+    const failed = new Set(r.failed || []);
+    const retry = rows.filter((row) => failed.has(row.device_id) || !joined.has(row.device_id));
+    result.replaceChildren(el('p', {}, `${groupName}：成功导入 ${rows.length - retry.length} 台` +
+      (retry.length ? `，${retry.length} 台未成功。已保留这些行，请修正后重试。` : '，全部完成。')));
+    if (retry.length) {
+      result.append(el('ul', {}, retry.map((row) => el('li', {},
+        `原第 ${row.line} 行 · ${row.device_id}：` + (failed.has(row.device_id)
+          ? '服务器报告导入失败，未提供具体原因。请检查设备 ID 和目标群状态。'
+          : '服务器未确认结果，请先检查群成员再重试。'),
+      ))));
+    }
+    f.elements.devices.value = retry.map((row) => row.raw).join('\n');
+    result.classList.toggle('invalid', retry.length > 0);
+  } catch (err) {
+    // A connection failure does not prove that the server made no changes.
+    result.replaceChildren(el('p', {}, `导入结果未确认：${err.message}。输入已保留；请检查网络、管理令牌及群成员后重试。`));
+    result.classList.add('invalid');
+  } finally {
+    batchPending = false;
+    f.removeAttribute('aria-busy');
+    for (const control of f.elements) control.disabled = false;
+    result.hidden = false;
+    renderBatchPreview();
+    refresh();
+  }
 };
+renderBatchPreview();
 
 let templates = [];
 fetch('/api/templates').then((r) => r.json()).then((list) => {
