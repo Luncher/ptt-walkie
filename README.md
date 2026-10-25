@@ -73,6 +73,9 @@ open http://localhost:8080/admin    # 车队管理
 
 ## 文档
 
+- [贡献指南](CONTRIBUTING.md) — 开发环境、代码入口、验证与 PR 提交
+- [演示与部署指南](docs/demo.md) · [故障排查](docs/troubleshooting.md)
+
 - [需求与产品设计](docs/requirements.md) · [黑客松实施计划](docs/hackathon-plan.md)
 - [设备对讲协议](docs/protocol.md) — 固件对接（WebSocket + Opus）
 - [固件接入指南](docs/firmware.md) — ESP32 双通道 / 音频仲裁 / 联调工具 / 性能实测
