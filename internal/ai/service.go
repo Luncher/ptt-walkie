@@ -248,15 +248,16 @@ func (s *Service) Summarize(ctx context.Context, deviceID, groupID string, since
 		slog.Warn("summary llm failed", "err", err)
 	}
 	if len(lines) > 0 {
-		recent := sum.Recordings
-		if len(recent) > 5 {
-			recent = recent[len(recent)-5:]
-		}
+		// Limit transcribed messages, not recordings: newer audio may not
+		// have a transcript yet and must not hide the available text.
 		var parts []string
-		for _, r := range recent {
+		for _, r := range sum.Recordings {
 			if r.Transcript != "" {
 				parts = append(parts, fmt.Sprintf("%s说「%s」", r.SpeakerName, r.Transcript))
 			}
+		}
+		if len(parts) > 5 {
+			parts = parts[len(parts)-5:]
 		}
 		sum.Text = fmt.Sprintf("%s%s有%d条消息，最近的：%s。", when, g.Name, sum.Count, strings.Join(parts, "；"))
 		return sum, nil
